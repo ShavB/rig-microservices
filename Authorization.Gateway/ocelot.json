@@ -1,0 +1,32 @@
+{
+    "Routes": [
+      {
+        "DownstreamPathTemplate": "/api/auth/{everything}",
+        "DownstreamScheme": "http",
+        "DownstreamHostAndPorts": [
+          {
+            "Host": "authentication-service",
+            "Port": 5002
+          }
+        ],
+        "UpstreamPathTemplate": "/api/auth/{everything}",
+        "UpstreamHttpMethod": [ "Get", "Put", "Post"]
+      },
+      {
+        "DownstreamPathTemplate": "/api/transaction/{everything}",
+        "DownstreamScheme": "http",
+        "DownstreamHostAndPorts": [
+          {
+            "Host": "transaction-service",
+            "Port": 5001
+          }
+        ],
+        "UpstreamPathTemplate": "/api/transaction/{everything}",
+        "UpstreamHttpMethod": [ "Get", "Put", "Post"]
+      }
+    ],
+    "GlobalConfiguration": {
+      "BaseUrl": "https://localhost:5010"
+    }
+  }
+  

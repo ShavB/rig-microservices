@@ -1,0 +1,25 @@
+
+# Stage 1: Build
+FROM mcr.microsoft.com/dotnet/sdk:8.0 as build
+WORKDIR /src
+
+# Copy csproj and restore as distinct layers
+COPY ["Authorization.Gateway.csproj", "./"]
+RUN dotnet restore "Authorization.Gateway.csproj"
+
+# Copy the remaining files and build
+COPY . .
+RUN dotnet build "Authorization.Gateway.csproj" -c Release -o /app/build
+
+# Stage 2: Publish
+FROM build AS publish
+RUN dotnet publish "Authorization.Gateway.csproj" -c Release -o /app/publish
+
+# Stage 3: Final Image
+FROM mcr.microsoft.com/dotnet/aspnet:8.0
+WORKDIR /app
+COPY ocelot.json /app/ocelot.json
+ENV ASPNETCORE_URLS=http://*:5010
+EXPOSE 5010
+COPY --from=publish /app/publish .
+ENTRYPOINT ["dotnet", "Authorization.Gateway.dll"]

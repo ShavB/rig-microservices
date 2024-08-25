@@ -1,0 +1,22 @@
+FROM mcr.microsoft.com/dotnet/sdk:8.0 AS build
+WORKDIR /src
+
+#Restore
+COPY ["Transaction.service.csproj", "./"]
+RUN dotnet restore "Transaction.service.csproj"
+
+#Build
+COPY . .
+RUN dotnet build "Transaction.service.csproj" -c release -o /app/build
+
+#stage 2: publish stage
+FROM build as publish
+RUN dotnet publish "Transaction.service.csproj" -c release -o /app/publish
+
+#RUN 
+FROM mcr.microsoft.com/dotnet/aspnet:8.0
+ENV ASPNETCORE_HTTP_PORTS=5001
+EXPOSE 5001
+WORKDIR /app
+COPY --from=publish /app/publish .
+ENTRYPOINT ["dotnet", "Transaction.service.dll"]

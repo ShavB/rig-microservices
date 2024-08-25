@@ -1,0 +1,22 @@
+FROM mcr.microsoft.com/dotnet/sdk:8.0 AS build
+WORKDIR /src
+
+#Restore
+COPY ["Authentication.Service.csproj", "./"]
+RUN dotnet restore "Authentication.Service.csproj"
+
+#Build
+COPY . .
+RUN dotnet build "Authentication.Service.csproj" -c release -o /app/build
+
+#stage 2: publish stage
+FROM build as publish
+RUN dotnet publish "Authentication.Service.csproj" -c release -o /app/publish
+
+#RUN 
+FROM mcr.microsoft.com/dotnet/aspnet:8.0
+ENV ASPNETCORE_HTTP_PORTS=5002
+EXPOSE 5002
+WORKDIR /app
+COPY --from=publish /app/publish .
+ENTRYPOINT ["dotnet", "Authentication.Service.dll"]

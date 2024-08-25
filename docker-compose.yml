@@ -1,0 +1,39 @@
+version: '3.8'
+
+services:
+  authentication-service:
+    image: authentication-service:latest
+    build:
+      context: ./Authentication.Service
+      dockerfile: Dockerfile.authentication
+    ports:
+      - "5002:5002"
+    networks:
+      - app-network
+
+  transaction-service:
+    image: transaction-service:latest
+    build:
+      context: ./Transaction.service
+      dockerfile: Dockerfile.transaction
+    ports:
+      - "5001:5001"
+    networks:
+      - app-network
+
+  authorization-gateway:
+    image: authorization-gateway:latest
+    build:
+      context: ./Authorization.Gateway
+      dockerfile: Dockerfile.gateway
+    ports:
+      - "5010:5010"
+    networks:
+      - app-network
+    depends_on:
+      - authentication-service
+      - transaction-service
+
+networks:
+  app-network:
+    driver: bridge
