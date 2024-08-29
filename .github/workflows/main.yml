@@ -1,29 +1,61 @@
-name: publish 🚀
+name: CI/CD Pipeline 🚀
 
 on:
-  workflow_dispatch:
   push:
     branches:
-    - main
+      - main
+  workflow_dispatch:
 
-jobs: 
-  publish:
+jobs:
+  build_and_deploy:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v3
+      # Checkout the code
+      - name: Checkout code
+        uses: actions/checkout@v3
 
-      - name: Setup .Net microservices
+      # Setup .NET
+      - name: Setup .NET
         uses: actions/setup-dotnet@v3
-        with: 
+        with:
           dotnet-version: '8.0.x'
 
+      # Restore dependencies
       - name: Restore
         run: dotnet restore ./research-rig.sln
 
+      # Build the project
       - name: Build
         run: dotnet build ./research-rig.sln --configuration Release --no-restore
 
+      # Run unit and integration tests
+      - name: Test
+        run: dotnet test ./research-rig.sln --configuration Release
+
+      # Publish the project
       - name: Publish
-        run : dotnet publish ./research-rig.sln --configuration Release --no-build
-      
+        run: dotnet publish ./research-rig.sln --configuration Release --no-build
+
+      # Login to Amazon ECR
+      - name: Login to Amazon ECR
+        run: |
+          aws ecr get-login-password --region eu-west-1 | docker login --username AWS --password-stdin ${{ secrets.AWS_ECR_REGISTRY }}
+       
+      # Build Docker images
+      - name: Build Docker Images
+        run: |
+          docker build -t authentication-service ./Authentication.Service
+          docker build -t transaction-service ./Transaction.service
+          docker build -t authorization-gateway ./Authorization.Gateway
+
+      # Tag and Push Docker images to ECR
+      - name: Tag and Push Docker Images to ECR
+        run: |
+          docker tag authentication-service:latest ${{ secrets.AWS_ECR_REGISTRY }}/authentication-service:latest
+          docker tag transaction-service:latest ${{ secrets.AWS_ECR_REGISTRY }}/transaction-service:latest
+          docker tag authorization-gateway:latest ${{ secrets.AWS_ECR_REGISTRY }}/authorization-gateway:latest
+
+          docker push ${{ secrets.AWS_ECR_REGISTRY }}/authentication-service:latest
+          docker push ${{ secrets.AWS_ECR_REGISTRY }}/transaction-service:latest
+          docker push ${{ secrets.AWS_ECR_REGISTRY }}/authorization-gateway:latest
