@@ -48,9 +48,10 @@ jobs:
       # Build Docker images
       - name: Build Docker Images
         run: |
-          docker build -t authentication-service -f Dockerfile.authentication ./Authentication.Service
-          docker build -t transaction-service -f Dockerfile.transaction ./Transaction.service
-          docker build -t authorization-gateway -f Dockerfile.gateway ./Authorization.Gateway
+          docker build -t authentication-service -f Authentication.Service/Dockerfile.authentication Authentication.Service
+
+          docker build -t transaction-service -f Transaction.service/Dockerfile.transaction Transaction.service
+          docker build -t authorization-gateway -f Authorization.Gateway/Dockerfile.gateway Authorization.Gateway
 
       # Tag and Push Docker images to ECR
       - name: Tag and Push Docker Images to ECR
