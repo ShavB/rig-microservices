@@ -21,6 +21,15 @@ jobs:
         with:
           dotnet-version: '8.0.x'
 
+      # Cache NuGet packages
+      - name: Cache NuGet packages
+        uses: actions/cache@v3
+        with:
+          path: ~/.nuget/packages
+          key: ${{ runner.os }}-nuget-${{ hashFiles('**/*.csproj') }}
+          restore-keys: |
+            ${{ runner.os }}-nuget-
+
       # Restore dependencies
       - name: Restore
         run: dotnet restore ./research-rig.sln
@@ -37,6 +46,10 @@ jobs:
       - name: Publish
         run: dotnet publish ./research-rig.sln --configuration Release --no-build
 
+      # Set up Docker Buildx
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v2
+
       # Login to Amazon ECR
       - name: Login to Amazon ECR
         run: |
@@ -45,21 +58,18 @@ jobs:
           AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
 
-      # Build Docker images
+      # Build Docker images using Buildx
       - name: Build Docker Images
         run: |
-          docker build -t authentication-service -f Authentication.Service/Dockerfile.authentication Authentication.Service
+          docker buildx build --tag authentication-service:${{ github.sha }} -f Authentication.Service/Dockerfile.authentication Authentication.Service
+          docker buildx build --tag transaction-service:${{ github.sha }} -f Transaction.service/Dockerfile.transaction Transaction.service
+          docker buildx build --tag authorization-gateway:${{ github.sha }} -f Authorization.Gateway/Dockerfile.gateway Authorization.Gateway
 
-          docker build -t transaction-service -f Transaction.service/Dockerfile.transaction Transaction.service
-          docker build -t authorization-gateway -f Authorization.Gateway/Dockerfile.gateway Authorization.Gateway
-
-      # Tag and Push Docker images to ECR
-      - name: Tag and Push Docker Images to ECR
+      # Push Docker images to ECR
+      - name: Push Docker Images to ECR
         run: |
-          docker tag authentication-service:latest ${{ secrets.AWS_ECR_REGISTRY }}/authentication-service:latest
-          docker tag transaction-service:latest ${{ secrets.AWS_ECR_REGISTRY }}/transaction-service:latest
-          docker tag authorization-gateway:latest ${{ secrets.AWS_ECR_REGISTRY }}/authorization-gateway:latest
-
-          docker push ${{ secrets.AWS_ECR_REGISTRY }}/authentication-service:latest
-          docker push ${{ secrets.AWS_ECR_REGISTRY }}/transaction-service:latest
-          docker push ${{ secrets.AWS_ECR_REGISTRY }}/authorization-gateway:latest
+          docker buildx build --push --tag ${{ secrets.AWS_ECR_REGISTRY }}/authentication-service:${{ github.sha }} -f Authentication.Service/Dockerfile.authentication Authentication.Service
+          docker buildx build --push --tag ${{ secrets.AWS_ECR_REGISTRY }}/transaction-service:${{ github.sha }} -f Transaction.service/Dockerfile.transaction Transaction.service
+          docker buildx build --push --tag ${{ secrets.AWS_ECR_REGISTRY }}/authorization-gateway:${{ github.sha }} -f Authorization.Gateway/Dockerfile.gateway Authorization.Gateway
+        env:
+          DOCKER_BUILDKIT: 1
