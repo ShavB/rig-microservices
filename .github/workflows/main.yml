@@ -9,6 +9,7 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+
     steps:
       # Checkout the code
       - name: Checkout code
@@ -20,14 +21,28 @@ jobs:
         with:
           dotnet-version: '8.0.x'
 
-      # Cache NuGet packages
-      - name: Cache NuGet packages
-        uses: actions/cache@v3
+      # Restore dependencies
+      - name: Restore
+        run: dotnet restore ./research-rig.sln
+
+      # Run unit and integration tests
+      - name: Test
+        run: dotnet test ./research-rig.sln --configuration Release
+
+  build:
+    runs-on: ubuntu-latest
+    needs: test
+
+    steps:
+      # Checkout the code
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      # Setup .NET
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v3
         with:
-          path: ~/.nuget/packages
-          key: ${{ runner.os }}-nuget-${{ hashFiles('**/*.csproj') }}
-          restore-keys: |
-            ${{ runner.os }}-nuget-
+          dotnet-version: '8.0.x'
 
       # Restore dependencies
       - name: Restore
@@ -37,41 +52,19 @@ jobs:
       - name: Build
         run: dotnet build ./research-rig.sln --configuration Release --no-restore
 
-      # Run unit and integration tests
-      - name: Test
-        run: dotnet test ./research-rig.sln --configuration Release
-
       # Publish the project
       - name: Publish
         run: dotnet publish ./research-rig.sln --configuration Release --no-build
 
-  build:
-    runs-on: ubuntu-latest
-    needs: test
-    steps:
-      # Set up Docker Buildx
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v2
-
-      # Login to Amazon ECR
-      - name: Login to Amazon ECR
-        run: |
-          aws ecr get-login-password --region eu-west-1 | docker login --username AWS --password-stdin ${{ secrets.AWS_ECR_REGISTRY }}
-        env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-
-      # Build Docker images using Buildx
-      - name: Build Docker Images
-        run: |
-          docker buildx build --tag authentication-service:${{ github.sha }} -f Authentication.Service/Dockerfile.authentication Authentication.Service
-          docker buildx build --tag transaction-service:${{ github.sha }} -f Transaction.service/Dockerfile.transaction Transaction.service
-          docker buildx build --tag authorization-gateway:${{ github.sha }} -f Authorization.Gateway/Dockerfile.gateway Authorization.Gateway
-
   push:
     runs-on: ubuntu-latest
     needs: build
+
     steps:
+      # Checkout the code
+      - name: Checkout code
+        uses: actions/checkout@v3
+
       # Login to Amazon ECR
       - name: Login to Amazon ECR
         run: |
@@ -80,11 +73,20 @@ jobs:
           AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
 
-      # Push Docker images to ECR
-      - name: Push Docker Images to ECR
+      # Build Docker images
+      - name: Build Docker Images
         run: |
-          docker buildx build --push --tag ${{ secrets.AWS_ECR_REGISTRY }}/authentication-service:${{ github.sha }} -f Authentication.Service/Dockerfile.authentication Authentication.Service
-          docker buildx build --push --tag ${{ secrets.AWS_ECR_REGISTRY }}/transaction-service:${{ github.sha }} -f Transaction.service/Dockerfile.transaction Transaction.service
-          docker buildx build --push --tag ${{ secrets.AWS_ECR_REGISTRY }}/authorization-gateway:${{ github.sha }} -f Authorization.Gateway/Dockerfile.gateway Authorization.Gateway
-        env:
-          DOCKER_BUILDKIT: 1
+          docker build -t authentication-service -f Authentication.Service/Dockerfile.authentication Authentication.Service
+          docker build -t transaction-service -f Transaction.Service/Dockerfile.transaction Transaction.Service
+          docker build -t authorization-gateway -f Authorization.Gateway/Dockerfile.gateway Authorization.Gateway
+
+      # Tag and Push Docker images to ECR
+      - name: Tag and Push Docker Images to ECR
+        run: |
+          docker tag authentication-service:latest ${{ secrets.AWS_ECR_REGISTRY }}/authentication-service:latest
+          docker tag transaction-service:latest ${{ secrets.AWS_ECR_REGISTRY }}/transaction-service:latest
+          docker tag authorization-gateway:latest ${{ secrets.AWS_ECR_REGISTRY }}/authorization-gateway:latest
+
+          docker push ${{ secrets.AWS_ECR_REGISTRY }}/authentication-service:latest
+          docker push ${{ secrets.AWS_ECR_REGISTRY }}/transaction-service:latest
+          docker push ${{ secrets.AWS_ECR_REGISTRY }}/authorization-gateway:latest
