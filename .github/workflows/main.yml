@@ -1,8 +1,8 @@
 name: CI/CD Pipeline 🚀
 
 on:
-  push: 
-    branches: 
+  push:
+    branches:
       - main
   workflow_dispatch:
 
@@ -62,81 +62,70 @@ jobs:
           AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
 
+      - name: Determine Next Version
+        id: version
+        run: |
+          # Fetch the latest tag from GitHub
+          LATEST_TAG=$(git describe --tags --abbrev=0)
+          echo "Latest tag: $LATEST_TAG"
+
+          # Determine the next version
+          NEXT_VERSION=$(echo "$LATEST_TAG" | awk -F. '{print "v" $1 "." $2 "." $3 + 1}')
+          echo "Next version: $NEXT_VERSION"
+
+          # Output the next version for use in later steps
+          echo "VERSION=$NEXT_VERSION" >> $GITHUB_ENV
+
       - name: Build Docker Images
         run: |
           docker build -t authentication-service -f Authentication.Service/Dockerfile.authentication Authentication.Service
-          docker build -t transaction-service -f Transaction.service/Dockerfile.transaction Transaction.service
+          docker build -t transaction-service -f Transaction.Service/Dockerfile.transaction Transaction.Service
           docker build -t authorization-gateway -f Authorization.Gateway/Dockerfile.gateway Authorization.Gateway
 
       - name: Tag and Push Docker Images to ECR
         run: |
-          docker tag authentication-service:latest ${{ secrets.AWS_ECR_REGISTRY }}/authentication-service:latest
-          docker tag transaction-service:latest ${{ secrets.AWS_ECR_REGISTRY }}/transaction-service:latest
-          docker tag authorization-gateway:latest ${{ secrets.AWS_ECR_REGISTRY }}/authorization-gateway:latest
+          docker tag authentication-service:latest ${{ secrets.AWS_ECR_REGISTRY }}/authentication-service:${{ env.VERSION }}
+          docker tag transaction-service:latest ${{ secrets.AWS_ECR_REGISTRY }}/transaction-service:${{ env.VERSION }}
+          docker tag authorization-gateway:latest ${{ secrets.AWS_ECR_REGISTRY }}/authorization-gateway:${{ env.VERSION }}
 
-          docker push ${{ secrets.AWS_ECR_REGISTRY }}/authentication-service:latest
-          docker push ${{ secrets.AWS_ECR_REGISTRY }}/transaction-service:latest
-          docker push ${{ secrets.AWS_ECR_REGISTRY }}/authorization-gateway:latest
+          docker push ${{ secrets.AWS_ECR_REGISTRY }}/authentication-service:${{ env.VERSION }}
+          docker push ${{ secrets.AWS_ECR_REGISTRY }}/transaction-service:${{ env.VERSION }}
+          docker push ${{ secrets.AWS_ECR_REGISTRY }}/authorization-gateway:${{ env.VERSION }}
 
       - name: Deploy to ECS
+        id: deploy
         run: |
-          aws ecs update-service --cluster rig-clusters --service rig-services --force-new-deployment
-        env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          AWS_DEFAULT_REGION: "eu-west-1"
+          IMAGE_TAG=${{ env.VERSION }}
+          aws ecs update-service --cluster ${ECS_CLUSTER} --service ${ECS_SERVICE} --force-new-deployment --region eu-west-1
 
-      - name: Monitor ECS Deployment and Rollback if Needed
+          # Monitor deployment status
+          sleep 60
+
+          DEPLOYMENT_ID=$(aws ecs describe-services --cluster ${ECS_CLUSTER} --services ${ECS_SERVICE} --query 'services[0].deployments[?status==`PRIMARY`].id' --output text)
+          STATUS=$(aws ecs describe-deployments --cluster ${ECS_CLUSTER} --deployment-ids $DEPLOYMENT_ID --query 'deployments[0].rolloutState' --output text)
+
+          echo "Deployment Status: $STATUS"
+          echo "deployment_status=$STATUS" >> $GITHUB_ENV
+
+      - name: Rollback ECS Deployment
+        if: env.deployment_status != 'COMPLETED'
         run: |
-          SERVICE_NAME="rig-services"
-          CLUSTER_NAME="rig-clusters"
-
-          # Get the current deployment ID
-          DEPLOYMENT_ID=$(aws ecs describe-services --cluster $CLUSTER_NAME --services $SERVICE_NAME --query 'services[0].deployments[?status==`PRIMARY`].id' --output text)
+          echo "Deployment failed, rolling back"
           
-          if [ -z "$DEPLOYMENT_ID" ]; then
-            echo "No active deployment found."
-            exit 1
-          fi
-
-          # Check the deployment status
-          STATUS=$(aws ecs describe-services --cluster $CLUSTER_NAME --services $SERVICE_NAME --query 'services[0].deployments[?id==`'"$DEPLOYMENT_ID"'`].rolloutState' --output text)
+          # Define rollback tag
+          ROLLBACK_TAG=$(echo ${{ env.VERSION }} | awk -F. '{print "v" $1 "." $2 "." $3 - 1}')
           
-          if [ "$STATUS" != "COMPLETED" ]; then
-            echo "Deployment failed, rolling back"
+          # Fetch manifest for rollback tag
+          MANIFEST=$(aws ecr batch-get-image --repository-name ${ECR_REPOSITORY} --image-ids imageTag=${ROLLBACK_TAG} --output json | jq --raw-output --join-output '.images[0].imageManifest')
 
-            # Get the current task definition
-            CURRENT_TASK_DEF=$(aws ecs describe-services --cluster $CLUSTER_NAME --services $SERVICE_NAME --query 'services[0].taskDefinition' --output text)
-            
-            if [ -z "$CURRENT_TASK_DEF" ]; then
-              echo "Current task definition not found."
-              exit 1
-            fi
+          # Move latest tag pointer to rollback version
+          aws ecr put-image --repository-name ${ECR_REPOSITORY} --image-tag latest --image-manifest "$MANIFEST"
+          
+          # Force a new deployment with the rollback image
+          aws ecs update-service --cluster ${ECS_CLUSTER} --service ${ECS_SERVICE} --force-new-deployment --region eu-west-1
+          
+          echo "Rollback completed to image tag ${ROLLBACK_TAG}"
 
-            # Get the revision of the current task definition
-            CURRENT_REVISION=$(aws ecs describe-task-definition --task-definition $CURRENT_TASK_DEF --query 'taskDefinition.revision' --output text)
-
-            if [ -z "$CURRENT_REVISION" ]; then
-              echo "Current task definition revision not found."
-              exit 1
-            fi
-            
-            # Calculate previous revision
-            PREV_REVISION=$((CURRENT_REVISION - 1))
-            PREV_TASK_DEF="${CURRENT_TASK_DEF%:*}:$PREV_REVISION"
-
-            # Verify that the previous task definition exists
-            if ! aws ecs describe-task-definition --task-definition $PREV_TASK_DEF > /dev/null 2>&1; then
-              echo "Previous task definition ${PREV_TASK_DEF} not found."
-              # Optional: If previous task definition not found, you might want to notify someone or log this event.
-              exit 1
-            fi
-            
-            # Roll back to the previous revision
-            aws ecs update-service --cluster $CLUSTER_NAME --service $SERVICE_NAME --task-definition $PREV_TASK_DEF --force-new-deployment
-          else
-            echo "Deployment successful"
-          fi
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
