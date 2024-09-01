@@ -1,117 +1,105 @@
-name: CI/CD Pipeline
+name: CI/CD Pipeline 🚀
 
-on: 
+on:
   push: 
-    branches: 
-      - main 
-  workflow_dispatch: 
+    branches:
+      - main
+  workflow_dispatch:
 
-jobs: 
-  test: 
-    runs-on: ubuntu-latest 
+jobs:
+  test:
+    runs-on: ubuntu-latest
 
-    steps: 
-      - name: Checkout code 
-        uses: actions/checkout@v3 
+    steps:
+      # Checkout the code
+      - name: Checkout code
+        uses: actions/checkout@v3
 
-      - name: Setup .NET 
-        uses: actions/setup-dotnet@v3 
-        with: 
-          dotnet-version: '8.0.x' 
+      # Setup .NET
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v3
+        with:
+          dotnet-version: '8.0.x'
 
-      - name: Restore 
-        run: dotnet restore ./research-rig.sln 
+      # Restore dependencies
+      - name: Restore
+        run: dotnet restore ./research-rig.sln
 
-      - name: Test 
-        run: dotnet test ./research-rig.sln --configuration Release 
+      # Run unit and integration tests
+      - name: Test
+        run: dotnet test ./research-rig.sln --configuration Release
 
-  build: 
-    runs-on: ubuntu-latest 
-    needs: test 
+  build:
+    runs-on: ubuntu-latest
+    needs: test
 
-    steps: 
-      - name: Checkout code 
-        uses: actions/checkout@v3 
+    steps:
+      # Checkout the code
+      - name: Checkout code
+        uses: actions/checkout@v3
 
-      - name: Setup .NET 
-        uses: actions/setup-dotnet@v3 
-        with: 
-          dotnet-version: '8.0.x' 
+      # Setup .NET
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v3
+        with:
+          dotnet-version: '8.0.x'
 
-      - name: Restore 
-        run: dotnet restore ./research-rig.sln 
+      # Restore dependencies
+      - name: Restore
+        run: dotnet restore ./research-rig.sln
 
-      - name: Build 
-        run: dotnet build ./research-rig.sln --configuration Release --no-restore 
+      # Build the project
+      - name: Build
+        run: dotnet build ./research-rig.sln --configuration Release --no-restore
 
-      - name: Publish 
-        run: dotnet publish ./research-rig.sln --configuration Release --no-build 
+      # Publish the project
+      - name: Publish
+        run: dotnet publish ./research-rig.sln --configuration Release --no-build
 
-      - name: Increment Version Number
-        id: version
+  push:
+    runs-on: ubuntu-latest
+    needs: build
+
+    steps:
+      # Checkout the code
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      # Login to Amazon ECR
+      - name: Login to Amazon ECR
         run: |
-          # Read the current version
-          version=$(cat version.txt)
-          echo "Current version: $version"
-
-          # Increment the patch version
-          IFS='.' read -r major minor patch <<< "$version"
-          patch=$((patch + 1))
-          new_version="$major.$minor.$patch"
-
-          # Update the version file
-          echo "$new_version" > version.txt
-          echo "New version: $new_version"
-          
-          # Output the new version as an environment variable
-          echo "VERSION=$new_version" >> $GITHUB_ENV
-
-      - name: Commit Version Bump
-        run: |
-          git config --global user.name 'github-actions'
-          git config --global user.email 'github-actions@github.com'
-          git add version.txt
-          git commit -m "Bump version to ${{ env.VERSION }}"
-          git push
+          aws ecr get-login-password --region eu-west-1 | docker login --username AWS --password-stdin ${{ secrets.AWS_ECR_REGISTRY }}
         env:
-          GITHUB_TOKEN: ${{ secrets.KEY_GITHUB }}  # Use the default GitHub Actions token
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
 
-  push: 
-    runs-on: ubuntu-latest 
-    needs: build 
+      # Build Docker images
+      - name: Build Docker Images
+        run: |
+          docker build -t authentication-service -f Authentication.Service/Dockerfile.authentication Authentication.Service
+          docker build -t transaction-service -f Transaction.service/Dockerfile.transaction Transaction.service
+          docker build -t authorization-gateway -f Authorization.Gateway/Dockerfile.gateway Authorization.Gateway
 
-    steps: 
-      - name: Checkout code 
-        uses: actions/checkout@v3 
+      # Tag and Push Docker images to ECR
+      - name: Tag and Push Docker Images to ECR
+        run: |
+          docker tag authentication-service:latest ${{ secrets.AWS_ECR_REGISTRY }}/authentication-service:latest
+          docker tag transaction-service:latest ${{ secrets.AWS_ECR_REGISTRY }}/transaction-service:latest
+          docker tag authorization-gateway:latest ${{ secrets.AWS_ECR_REGISTRY }}/authorization-gateway:latest
 
-      - name: Login to Amazon ECR 
-        run: | 
-          aws ecr get-login-password --region ${{ secrets.AWS_REGION }} | docker login --username AWS --password-stdin ${{ secrets.AWS_ECR_REGISTRY }} 
-        env: 
-          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }} 
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }} 
+          docker push ${{ secrets.AWS_ECR_REGISTRY }}/authentication-service:latest
+          docker push ${{ secrets.AWS_ECR_REGISTRY }}/transaction-service:latest
+          docker push ${{ secrets.AWS_ECR_REGISTRY }}/authorization-gateway:latest
 
-      - name: Build Docker Images 
-        run: | 
-          docker build -t authentication-service:${{ env.VERSION }} -f Authentication.Service/Dockerfile.authentication Authentication.Service 
-          docker build -t transaction-service:${{ env.VERSION }} -f Transaction.service/Dockerfile.transaction Transaction.service 
-          docker build -t authorization-gateway:${{ env.VERSION }} -f Authorization.Gateway/Dockerfile.gateway Authorization.Gateway 
+      # Deploy to ECS
+      - name: Deploy to ECS
+        uses: imehedi/actions-awscli-v2@latest
+        with:
+          args: ecs update-service --cluster rig-clusters --service rig-services --force-new-deployment
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: "eu-west-1"
 
-      - name: Tag and Push Docker Images to ECR 
-        run: | 
-          docker tag authentication-service:${{ env.VERSION }} ${{ secrets.AWS_ECR_REGISTRY }}/authentication-service:${{ env.VERSION }} 
-          docker tag transaction-service:${{ env.VERSION }} ${{ secrets.AWS_ECR_REGISTRY }}/transaction-service:${{ env.VERSION }} 
-          docker tag authorization-gateway:${{ env.VERSION }} ${{ secrets.AWS_ECR_REGISTRY }}/authorization-gateway:${{ env.VERSION }} 
-
-          docker push ${{ secrets.AWS_ECR_REGISTRY }}/authentication-service:${{ env.VERSION }} 
-          docker push ${{ secrets.AWS_ECR_REGISTRY }}/transaction-service:${{ env.VERSION }} 
-          docker push ${{ secrets.AWS_ECR_REGISTRY }}/authorization-gateway:${{ env.VERSION }} 
-
-      - name: Deploy to ECS 
-        uses: imehedi/actions-awscli-v2@latest 
-        with: 
-          args: ecs update-service --cluster rig-clusters --service rig-services --force-new-deployment 
-        env: 
-          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }} 
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }} 
-          AWS_DEFAULT_REGION: ${{ secrets.AWS_REGION }}
+      # Monitor and rollback if needed
+     
