@@ -11,21 +11,17 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      # Checkout the code
       - name: Checkout code
         uses: actions/checkout@v3
 
-      # Setup .NET
       - name: Setup .NET
         uses: actions/setup-dotnet@v3
         with:
           dotnet-version: '8.0.x'
 
-      # Restore dependencies
       - name: Restore
         run: dotnet restore ./research-rig.sln
 
-      # Run unit and integration tests
       - name: Test
         run: dotnet test ./research-rig.sln --configuration Release
 
@@ -34,25 +30,20 @@ jobs:
     needs: test
 
     steps:
-      # Checkout the code
       - name: Checkout code
         uses: actions/checkout@v3
 
-      # Setup .NET
       - name: Setup .NET
         uses: actions/setup-dotnet@v3
         with:
           dotnet-version: '8.0.x'
 
-      # Restore dependencies
       - name: Restore
         run: dotnet restore ./research-rig.sln
 
-      # Build the project
       - name: Build
         run: dotnet build ./research-rig.sln --configuration Release --no-restore
 
-      # Publish the project
       - name: Publish
         run: dotnet publish ./research-rig.sln --configuration Release --no-build
 
@@ -61,11 +52,9 @@ jobs:
     needs: build
 
     steps:
-      # Checkout the code
       - name: Checkout code
         uses: actions/checkout@v3
 
-      # Login to Amazon ECR
       - name: Login to Amazon ECR
         run: |
           aws ecr get-login-password --region eu-west-1 | docker login --username AWS --password-stdin ${{ secrets.AWS_ECR_REGISTRY }}
@@ -73,14 +62,12 @@ jobs:
           AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
 
-      # Build Docker images
       - name: Build Docker Images
         run: |
           docker build -t authentication-service -f Authentication.Service/Dockerfile.authentication Authentication.Service
           docker build -t transaction-service -f Transaction.service/Dockerfile.transaction Transaction.service
           docker build -t authorization-gateway -f Authorization.Gateway/Dockerfile.gateway Authorization.Gateway
 
-      # Tag and Push Docker images to ECR
       - name: Tag and Push Docker Images to ECR
         run: |
           docker tag authentication-service:latest ${{ secrets.AWS_ECR_REGISTRY }}/authentication-service:latest
@@ -91,7 +78,6 @@ jobs:
           docker push ${{ secrets.AWS_ECR_REGISTRY }}/transaction-service:latest
           docker push ${{ secrets.AWS_ECR_REGISTRY }}/authorization-gateway:latest
 
-      # Deploy to ECS
       - name: Deploy to ECS
         uses: imehedi/actions-awscli-v2@latest
         with:
@@ -101,6 +87,23 @@ jobs:
           AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           AWS_DEFAULT_REGION: "eu-west-1"
 
-      # Monitor and rollback if needed
-     
+      - name: Monitor ECS Deployment and Rollback if Needed
+        run: |
+          # Monitor the deployment status
+          DEPLOYMENT_ID=$(aws ecs describe-services --cluster rig-clusters --services rig-services --query 'services[0].deployments[?status==`PRIMARY`].id' --output text)
+          STATUS=$(aws ecs describe-deployments --cluster rig-clusters --deployment-ids $DEPLOYMENT_ID --query 'deployments[0].rolloutState' --output text)
 
+          if [ "$STATUS" != "COMPLETED" ]; then
+            echo "Deployment failed, rolling back"
+            # Get the previous revision task definition
+            PREV_TASK_DEF=$(aws ecs describe-services --cluster rig-clusters --services rig-services --query 'services[0].taskDefinition' --output text)
+            PREV_REVISION=$(aws ecs describe-task-definition --task-definition $PREV_TASK_DEF --query 'taskDefinition.revision' --output text)
+            # Roll back to the previous revision
+            aws ecs update-service --cluster rig-clusters --service rig-services --task-definition ${PREV_TASK_DEF%:*}:$((PREV_REVISION - 1)) --force-new-deployment
+          else
+            echo "Deployment successful"
+          fi
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: "eu-west-1"
