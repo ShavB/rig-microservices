@@ -65,7 +65,7 @@ jobs:
       - name: Build Docker Images
         run: |
           docker build -t authentication-service -f Authentication.Service/Dockerfile.authentication Authentication.Service
-          docker build -t transaction-service -f Transaction.service/Dockerfile.transaction Transaction.service
+          docker build -t transaction-service -f Transaction.Service/Dockerfile.transaction Transaction.Service
           docker build -t authorization-gateway -f Authorization.Gateway/Dockerfile.gateway Authorization.Gateway
 
       - name: Tag and Push Docker Images to ECR
@@ -79,9 +79,8 @@ jobs:
           docker push ${{ secrets.AWS_ECR_REGISTRY }}/authorization-gateway:latest
 
       - name: Deploy to ECS
-        uses: imehedi/actions-awscli-v2@latest
-        with:
-          args: ecs update-service --cluster rig-clusters --service rig-services --force-new-deployment
+        run: |
+          aws ecs update-service --cluster rig-clusters --service rig-services --force-new-deployment
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
@@ -90,16 +89,34 @@ jobs:
       - name: Monitor ECS Deployment and Rollback if Needed
         run: |
           # Monitor the deployment status
-          DEPLOYMENT_ID=$(aws ecs describe-services --cluster rig-clusters --services rig-services --query 'services[0].deployments[?status==`PRIMARY`].id' --output text)
-          STATUS=$(aws ecs describe-deployments --cluster rig-clusters --deployment-ids $DEPLOYMENT_ID --query 'deployments[0].rolloutState' --output text)
+          SERVICE_NAME="rig-services"
+          CLUSTER_NAME="rig-clusters"
 
+          # Get the current deployment ID
+          DEPLOYMENT_ID=$(aws ecs describe-services --cluster $CLUSTER_NAME --services $SERVICE_NAME --query 'services[0].deployments[?status==`PRIMARY`].id' --output text)
+          
+          if [ -z "$DEPLOYMENT_ID" ]; then
+            echo "No active deployment found."
+            exit 1
+          fi
+
+          # Check the deployment status
+          STATUS=$(aws ecs describe-services --cluster $CLUSTER_NAME --services $SERVICE_NAME --query 'services[0].deployments[?id==`'"$DEPLOYMENT_ID"'`].rolloutState' --output text)
+          
           if [ "$STATUS" != "COMPLETED" ]; then
             echo "Deployment failed, rolling back"
             # Get the previous revision task definition
-            PREV_TASK_DEF=$(aws ecs describe-services --cluster rig-clusters --services rig-services --query 'services[0].taskDefinition' --output text)
-            PREV_REVISION=$(aws ecs describe-task-definition --task-definition $PREV_TASK_DEF --query 'taskDefinition.revision' --output text)
+            CURRENT_TASK_DEF=$(aws ecs describe-services --cluster $CLUSTER_NAME --services $SERVICE_NAME --query 'services[0].taskDefinition' --output text)
+            PREV_TASK_DEF=$(aws ecs describe-task-definition --task-definition $CURRENT_TASK_DEF --query 'taskDefinition.revision' --output text)
+            
+            if [ -z "$PREV_TASK_DEF" ]; then
+              echo "Previous task definition not found."
+              exit 1
+            fi
+            
             # Roll back to the previous revision
-            aws ecs update-service --cluster rig-clusters --service rig-services --task-definition ${PREV_TASK_DEF%:*}:$((PREV_REVISION - 1)) --force-new-deployment
+            PREV_REVISION=$((PREV_TASK_DEF - 1))
+            aws ecs update-service --cluster $CLUSTER_NAME --service $SERVICE_NAME --task-definition ${CURRENT_TASK_DEF%:*}:$PREV_REVISION --force-new-deployment
           else
             echo "Deployment successful"
           fi
