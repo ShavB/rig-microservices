@@ -1,7 +1,7 @@
 name: CI/CD Pipeline 🚀
 
 on:
-  push:
+  push: 
     branches:
       - main
   workflow_dispatch:
@@ -11,17 +11,21 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      # Checkout the code
       - name: Checkout code
         uses: actions/checkout@v3
 
+      # Setup .NET
       - name: Setup .NET
         uses: actions/setup-dotnet@v3
         with:
           dotnet-version: '8.0.x'
 
+      # Restore dependencies
       - name: Restore
         run: dotnet restore ./research-rig.sln
 
+      # Run unit and integration tests
       - name: Test
         run: dotnet test ./research-rig.sln --configuration Release
 
@@ -30,20 +34,25 @@ jobs:
     needs: test
 
     steps:
+      # Checkout the code
       - name: Checkout code
         uses: actions/checkout@v3
 
+      # Setup .NET
       - name: Setup .NET
         uses: actions/setup-dotnet@v3
         with:
           dotnet-version: '8.0.x'
 
+      # Restore dependencies
       - name: Restore
         run: dotnet restore ./research-rig.sln
 
+      # Build the project
       - name: Build
         run: dotnet build ./research-rig.sln --configuration Release --no-restore
 
+      # Publish the project
       - name: Publish
         run: dotnet publish ./research-rig.sln --configuration Release --no-build
 
@@ -52,9 +61,11 @@ jobs:
     needs: build
 
     steps:
+      # Checkout the code
       - name: Checkout code
         uses: actions/checkout@v3
 
+      # Login to Amazon ECR
       - name: Login to Amazon ECR
         run: |
           aws ecr get-login-password --region eu-west-1 | docker login --username AWS --password-stdin ${{ secrets.AWS_ECR_REGISTRY }}
@@ -62,71 +73,32 @@ jobs:
           AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
 
-      - name: Determine Next Version
-        id: version
-        run: |
-          # Fetch the latest tag from GitHub
-          LATEST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "0.0.0")
-          echo "Latest tag: $LATEST_TAG"
-
-          # Determine the next version
-          NEXT_VERSION=$(echo "$LATEST_TAG" | awk -F. '{print "v" $1 "." $2 "." $3 + 1}')
-          echo "Next version: $NEXT_VERSION"
-
-          # Output the next version for use in later steps
-          echo "VERSION=$NEXT_VERSION" >> $GITHUB_ENV
-
+      # Build Docker images
       - name: Build Docker Images
         run: |
           docker build -t authentication-service -f Authentication.Service/Dockerfile.authentication Authentication.Service
           docker build -t transaction-service -f Transaction.service/Dockerfile.transaction Transaction.service
           docker build -t authorization-gateway -f Authorization.Gateway/Dockerfile.gateway Authorization.Gateway
 
+      # Tag and Push Docker images to ECR
       - name: Tag and Push Docker Images to ECR
         run: |
-          docker tag authentication-service:latest ${{ secrets.AWS_ECR_REGISTRY }}/authentication-service:${{ env.VERSION }}
-          docker tag transaction-service:latest ${{ secrets.AWS_ECR_REGISTRY }}/transaction-service:${{ env.VERSION }}
-          docker tag authorization-gateway:latest ${{ secrets.AWS_ECR_REGISTRY }}/authorization-gateway:${{ env.VERSION }}
+          docker tag authentication-service:latest ${{ secrets.AWS_ECR_REGISTRY }}/authentication-service:latest
+          docker tag transaction-service:latest ${{ secrets.AWS_ECR_REGISTRY }}/transaction-service:latest
+          docker tag authorization-gateway:latest ${{ secrets.AWS_ECR_REGISTRY }}/authorization-gateway:latest
 
-          docker push ${{ secrets.AWS_ECR_REGISTRY }}/authentication-service:${{ env.VERSION }}
-          docker push ${{ secrets.AWS_ECR_REGISTRY }}/transaction-service:${{ env.VERSION }}
-          docker push ${{ secrets.AWS_ECR_REGISTRY }}/authorization-gateway:${{ env.VERSION }}
+          docker push ${{ secrets.AWS_ECR_REGISTRY }}/authentication-service:latest
+          docker push ${{ secrets.AWS_ECR_REGISTRY }}/transaction-service:latest
+          docker push ${{ secrets.AWS_ECR_REGISTRY }}/authorization-gateway:latest
 
+      # Deploy to ECS
       - name: Deploy to ECS
-        id: deploy
-        run: |
-          IMAGE_TAG=${{ env.VERSION }}
-          aws ecs update-service --cluster rig-clusters --service rig-services --force-new-deployment --region eu-west-1
-
-          # Monitor deployment status
-          sleep 60
-
-          DEPLOYMENT_ID=$(aws ecs describe-services --cluster rig-clusters --services rig-services --query 'services[0].deployments[?status==`PRIMARY`].id' --output text)
-          STATUS=$(aws ecs describe-deployments --cluster rig-clusters --deployment-ids $DEPLOYMENT_ID --query 'deployments[0].rolloutState' --output text)
-
-          echo "Deployment Status: $STATUS"
-          echo "deployment_status=$STATUS" >> $GITHUB_ENV
-
-      - name: Rollback ECS Deployment
-        if: env.deployment_status != 'COMPLETED'
-        run: |
-          echo "Deployment failed, rolling back"
-          
-          # Define rollback tag
-          ROLLBACK_TAG=$(echo ${{ env.VERSION }} | awk -F. '{print "v" $1 "." $2 "." $3 - 1}')
-          
-          # Fetch manifest for rollback tag
-          MANIFEST=$(aws ecr batch-get-image --repository-name ${ECR_REPOSITORY} --image-ids imageTag=${ROLLBACK_TAG} --output json | jq --raw-output --join-output '.images[0].imageManifest')
-
-          # Move latest tag pointer to rollback version
-          aws ecr put-image --repository-name ${ECR_REPOSITORY} --image-tag latest --image-manifest "$MANIFEST"
-          
-          # Force a new deployment with the rollback image
-          aws ecs update-service --cluster rig-clusters --service rig-services --force-new-deployment --region eu-west-1
-          
-          echo "Rollback completed to image tag ${ROLLBACK_TAG}"
-
+        uses: imehedi/actions-awscli-v2@latest
+        with:
+          args: ecs update-service --cluster rig-clusters --service rig-servies --force-new-deployment
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           AWS_DEFAULT_REGION: "eu-west-1"
+
+     
