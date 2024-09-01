@@ -73,6 +73,8 @@ jobs:
           git add version.txt
           git commit -m "Bump version to ${{ env.VERSION }}"
           git push
+        env:
+          GITHUB_TOKEN: ${{ secrets.KEY_GITHUB }}  # Use the default GitHub Actions token
 
   push: 
     runs-on: ubuntu-latest 
@@ -112,4 +114,4 @@ jobs:
         env: 
           AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }} 
           AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }} 
-          AWS_DEFAULT_REGION: ${{ secrets.AWS_REGION }} 
+          AWS_DEFAULT_REGION: ${{ secrets.AWS_REGION }}
