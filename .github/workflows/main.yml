@@ -88,7 +88,6 @@ jobs:
 
       - name: Monitor ECS Deployment and Rollback if Needed
         run: |
-          # Monitor the deployment status
           SERVICE_NAME="rig-services"
           CLUSTER_NAME="rig-clusters"
 
@@ -105,18 +104,35 @@ jobs:
           
           if [ "$STATUS" != "COMPLETED" ]; then
             echo "Deployment failed, rolling back"
-            # Get the previous revision task definition
+
+            # Get the current task definition
             CURRENT_TASK_DEF=$(aws ecs describe-services --cluster $CLUSTER_NAME --services $SERVICE_NAME --query 'services[0].taskDefinition' --output text)
-            PREV_TASK_DEF=$(aws ecs describe-task-definition --task-definition $CURRENT_TASK_DEF --query 'taskDefinition.revision' --output text)
             
-            if [ -z "$PREV_TASK_DEF" ]; then
-              echo "Previous task definition not found."
+            if [ -z "$CURRENT_TASK_DEF" ]; then
+              echo "Current task definition not found."
+              exit 1
+            fi
+
+            # Get the revision of the current task definition
+            CURRENT_REVISION=$(aws ecs describe-task-definition --task-definition $CURRENT_TASK_DEF --query 'taskDefinition.revision' --output text)
+
+            if [ -z "$CURRENT_REVISION" ]; then
+              echo "Current task definition revision not found."
+              exit 1
+            fi
+            
+            # Calculate previous revision
+            PREV_REVISION=$((CURRENT_REVISION - 1))
+            PREV_TASK_DEF="${CURRENT_TASK_DEF%:*}:$PREV_REVISION"
+
+            # Verify that the previous task definition exists
+            if ! aws ecs describe-task-definition --task-definition $PREV_TASK_DEF > /dev/null 2>&1; then
+              echo "Previous task definition ${PREV_TASK_DEF} not found."
               exit 1
             fi
             
             # Roll back to the previous revision
-            PREV_REVISION=$((PREV_TASK_DEF - 1))
-            aws ecs update-service --cluster $CLUSTER_NAME --service $SERVICE_NAME --task-definition ${CURRENT_TASK_DEF%:*}:$PREV_REVISION --force-new-deployment
+            aws ecs update-service --cluster $CLUSTER_NAME --service $SERVICE_NAME --task-definition $PREV_TASK_DEF --force-new-deployment
           else
             echo "Deployment successful"
           fi
